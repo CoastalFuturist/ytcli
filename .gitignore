@@ -1,12 +1,29 @@
 # Build artifacts
 ytcli
 dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.*
+*.coverprofile
+profile.cov
 
 # Go workspace
 bin/
+go.work
+go.work.sum
 
 # Local environments
 .venv/
+.env
 
 # macOS
 .DS_Store
+
+# Editor/IDE
+# .idea/
+# .vscode/

@@ -47,8 +47,6 @@ sudo apt install -y yt-dlp ffmpeg
 go install github.com/CoastalFuturist/ytcli@latest
 ```
 
-If you publish this under a different GitHub repo path, replace the module path accordingly.
-
 ### Option 3: Build from source
 
 ```bash
