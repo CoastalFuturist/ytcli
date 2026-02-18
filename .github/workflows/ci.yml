@@ -2,12 +2,12 @@ name: ci
 
 on:
   push:
-    branches: [main, master]
+    branches: ["**"]
   pull_request:
-    branches: [main, master]
+    branches: ["**"]
 
 jobs:
-  test-and-build:
+  build-and-test:
     runs-on: ubuntu-latest
 
     steps:
@@ -22,4 +22,4 @@ jobs:
         run: go test ./...
 
       - name: Build
-        run: go build -trimpath -o ytcli .
+        run: go build ./...

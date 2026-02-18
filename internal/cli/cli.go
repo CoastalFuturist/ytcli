@@ -1,10 +1,11 @@
-package main
+package cli
 
 import (
 	"bufio"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/CoastalFuturist/ytcli/internal/buildinfo"
 )
 
 var (
@@ -22,8 +25,6 @@ var (
 )
 
 const finalPathPrefix = "__YTCLI_FINAL_PATH__:"
-
-var version = "dev"
 
 type config struct {
 	URL         string
@@ -238,51 +239,62 @@ func buildArgs(cfg config, meta *trackMetadata) ([]string, error) {
 	return args, nil
 }
 
-func usage() {
-	fmt.Fprintf(os.Stderr, "Usage: ytcli [--start MM:SS|HH:MM:SS] [--end MM:SS|HH:MM:SS] [--mode audio|video|full] [--output PATH] [--apple-music] [--version] <url>\n")
-	flag.PrintDefaults()
+func newFlagSet(cfg *config, stderr io.Writer) *flag.FlagSet {
+	fs := flag.NewFlagSet("ytcli", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.StringVar(&cfg.Start, "start", "", "clip start timestamp (MM:SS or HH:MM:SS)")
+	fs.StringVar(&cfg.End, "end", "", "clip end timestamp (MM:SS or HH:MM:SS)")
+	fs.StringVar(&cfg.Mode, "mode", "full", "download mode: audio, video, or full")
+	fs.StringVar(&cfg.Output, "output", "", "destination file path or directory")
+	fs.BoolVar(&cfg.AppleMusic, "apple-music", false, "when mode=audio, import downloaded track into Apple Music library (macOS)")
+	fs.BoolVar(&cfg.ShowVersion, "version", false, "print version and build metadata, then exit")
+	fs.Usage = func() {
+		fmt.Fprintf(stderr, "Usage:\n  ytcli [--start MM:SS|HH:MM:SS] [--end MM:SS|HH:MM:SS] [--mode audio|video|full] [--output PATH] [--apple-music] [--version] <url>\n  ytcli version\n")
+		fs.PrintDefaults()
+	}
+	return fs
 }
 
-func parseConfig() (config, error) {
+func parseConfig(args []string, stderr io.Writer) (config, *flag.FlagSet, error) {
 	var cfg config
+	if len(args) == 1 && args[0] == "version" {
+		cfg.ShowVersion = true
+		return cfg, nil, nil
+	}
 
-	flag.StringVar(&cfg.Start, "start", "", "clip start timestamp (MM:SS or HH:MM:SS)")
-	flag.StringVar(&cfg.End, "end", "", "clip end timestamp (MM:SS or HH:MM:SS)")
-	flag.StringVar(&cfg.Mode, "mode", "full", "download mode: audio, video, or full")
-	flag.StringVar(&cfg.Output, "output", "", "destination file path or directory")
-	flag.BoolVar(&cfg.AppleMusic, "apple-music", false, "when mode=audio, import downloaded track into Apple Music library (macOS)")
-	flag.BoolVar(&cfg.ShowVersion, "version", false, "print ytcli version and exit")
-	flag.Usage = usage
-	flag.Parse()
+	fs := newFlagSet(&cfg, stderr)
+	if err := fs.Parse(args); err != nil {
+		return cfg, fs, err
+	}
 
 	if cfg.ShowVersion {
-		return cfg, nil
+		return cfg, fs, nil
 	}
 
-	if flag.NArg() != 1 {
-		return cfg, fmt.Errorf("missing required url argument")
+	if fs.NArg() != 1 {
+		return cfg, fs, fmt.Errorf("missing required url argument")
 	}
-	cfg.URL = flag.Arg(0)
+	cfg.URL = fs.Arg(0)
 
 	start, err := normalizeTimestamp(cfg.Start)
 	if err != nil {
-		return cfg, err
+		return cfg, fs, err
 	}
 	end, err := normalizeTimestamp(cfg.End)
 	if err != nil {
-		return cfg, err
+		return cfg, fs, err
 	}
 	cfg.Start = start
 	cfg.End = end
 
 	if cfg.Start != "" && cfg.End != "" && timestampToSeconds(cfg.End) <= timestampToSeconds(cfg.Start) {
-		return cfg, fmt.Errorf("--end must be greater than --start")
+		return cfg, fs, fmt.Errorf("--end must be greater than --start")
 	}
 	if cfg.AppleMusic && cfg.Mode != "audio" {
-		return cfg, fmt.Errorf("--apple-music is only supported with --mode audio")
+		return cfg, fs, fmt.Errorf("--apple-music is only supported with --mode audio")
 	}
 
-	return cfg, nil
+	return cfg, fs, nil
 }
 
 func importIntoAppleMusic(path string) error {
@@ -384,7 +396,7 @@ func fetchTrackMetadata(ytDlpBinary, url string) (*trackMetadata, error) {
 	return &meta, nil
 }
 
-func run(cfg config) error {
+func run(cfg config, stdout, stderr io.Writer) error {
 	ytDlpBinary, err := resolveYtDlpBinary()
 	if err != nil {
 		return err
@@ -395,9 +407,9 @@ func run(cfg config) error {
 		fetchedMeta, fetchErr := fetchTrackMetadata(ytDlpBinary, cfg.URL)
 		if fetchErr == nil {
 			meta = fetchedMeta
-			fmt.Printf("Parsed audio metadata: %s - %s\n", meta.Artist, meta.Title)
+			fmt.Fprintf(stdout, "Parsed audio metadata: %s - %s\n", meta.Artist, meta.Title)
 		} else {
-			fmt.Fprintf(os.Stderr, "Warning: metadata parsing failed, using default title (%v)\n", fetchErr)
+			fmt.Fprintf(stderr, "Warning: metadata parsing failed, using default title (%v)\n", fetchErr)
 		}
 	}
 
@@ -412,9 +424,9 @@ func run(cfg config) error {
 	}
 
 	cmd := exec.Command(ytDlpBinary, args...)
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = stderr
 	if cfg.AppleMusic {
-		stdout, err := cmd.StdoutPipe()
+		cmdStdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return fmt.Errorf("failed to capture yt-dlp output: %w", err)
 		}
@@ -422,7 +434,7 @@ func run(cfg config) error {
 			return fmt.Errorf("failed to start download: %w", err)
 		}
 
-		scanner := bufio.NewScanner(stdout)
+		scanner := bufio.NewScanner(cmdStdout)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -430,7 +442,7 @@ func run(cfg config) error {
 				downloadedPath = parsedPath
 				continue
 			}
-			fmt.Println(line)
+			fmt.Fprintln(stdout, line)
 		}
 		if err := scanner.Err(); err != nil {
 			return fmt.Errorf("failed to read yt-dlp output: %w", err)
@@ -445,33 +457,39 @@ func run(cfg config) error {
 		if err := importIntoAppleMusic(downloadedPath); err != nil {
 			return err
 		}
-		fmt.Printf("Imported into Apple Music: %s\n", downloadedPath)
+		fmt.Fprintf(stdout, "Imported into Apple Music: %s\n", downloadedPath)
 	} else {
-		cmd.Stdout = os.Stdout
+		cmd.Stdout = stdout
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("download failed: %w", err)
 		}
 	}
 
-	fmt.Println("Download completed successfully.")
+	fmt.Fprintln(stdout, "Download completed successfully.")
 	return nil
 }
 
-func main() {
-	cfg, err := parseConfig()
+func Main(args []string, stdout, stderr io.Writer) int {
+	cfg, fs, err := parseConfig(args, stderr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		usage()
-		os.Exit(2)
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		if fs != nil {
+			fs.Usage()
+		}
+		return 2
 	}
 
 	if cfg.ShowVersion {
-		fmt.Println(version)
-		return
+		fmt.Fprintln(stdout, buildinfo.String())
+		return 0
 	}
 
-	if err := run(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+	if err := run(cfg, stdout, stderr); err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
 	}
+	return 0
 }

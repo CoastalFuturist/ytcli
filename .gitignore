@@ -1,5 +1,5 @@
 # Build artifacts
-ytcli
+/ytcli
 dist/
 *.exe
 *.exe~

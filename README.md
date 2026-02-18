@@ -1,31 +1,26 @@
 # ytcli
 
-A lightweight CLI wrapper around `yt-dlp` for downloading YouTube media as:
-- full MP4 (video + audio)
-- video-only MP4
-- audio-only MP3
-- optional clipped ranges (`--start` / `--end`)
-- optional Apple Music import for audio downloads on macOS (`--apple-music`)
+`ytcli` is a lightweight CLI wrapper around `yt-dlp` for downloading YouTube media.
 
 ## Features
 
-- Fast single-command downloads with sensible defaults
-- Clean audio filename parsing (`Artist - Title.mp3`) when possible
-- Clip extraction from timestamps
-- Custom output path or output directory
-- Apple Music library import after download (macOS only)
-- Automated CI + tag-based release binaries via GitHub Actions
+- Download full video (`mp4` with audio)
+- Download video-only (`mp4`)
+- Download audio-only (`mp3`)
+- Clip by time range (`--start` / `--end`)
+- Optional Apple Music import after audio download on macOS (`--apple-music`)
+- Version output via `--version` or `ytcli version`
 
 ## Requirements
 
-- `yt-dlp` installed and available in `PATH`
-- `ffmpeg` installed (required by `yt-dlp` for conversion/recode/extraction)
-- macOS + Music.app only if using `--apple-music`
+- `yt-dlp` in `PATH`
+- `ffmpeg` in `PATH`
+- macOS + Music.app only for `--apple-music`
 
-Install helper tools:
+Example installs:
 
 ```bash
-# macOS (Homebrew)
+# macOS
 brew install yt-dlp ffmpeg
 
 # Ubuntu/Debian
@@ -35,19 +30,19 @@ sudo apt install -y yt-dlp ffmpeg
 
 ## Install
 
-### Option 1: Download a prebuilt binary (recommended for non-developers)
+### 1) Download a release binary (recommended)
 
-1. Open the latest release: `https://github.com/CoastalFuturist/ytcli/releases/latest`
-2. Download the archive for your OS/CPU.
-3. Extract and move `ytcli` (`ytcli.exe` on Windows) into your `PATH`.
+1. Go to: `https://github.com/CoastalFuturist/ytcli/releases/latest`
+2. Download the archive for your OS/architecture.
+3. Extract and place `ytcli` (`ytcli.exe` on Windows) somewhere on your `PATH`.
 
-### Option 2: Install with Go
+### 2) Install with Go
 
 ```bash
 go install github.com/CoastalFuturist/ytcli@latest
 ```
 
-### Option 3: Build from source
+### 3) Build from source
 
 ```bash
 git clone https://github.com/CoastalFuturist/ytcli.git
@@ -55,53 +50,44 @@ cd ytcli
 make build
 ```
 
-or:
-
-```bash
-go build -trimpath -o ytcli .
-```
-
 ## Usage
 
 ```bash
-ytcli [--start MM:SS|HH:MM:SS] [--end MM:SS|HH:MM:SS] [--mode audio|video|full] [--output PATH] [--apple-music] [--version] <url>
+ytcli [--start MM:SS|HH:MM:SS] [--end MM:SS|HH:MM:SS] [--mode audio|video|full] [--output PATH] [--apple-music] <url>
+
+# also supported
+ytcli --version
+ytcli version
 ```
 
 ## Flags
 
-| Flag | Description | Default |
-|---|---|---|
-| `--mode` | Download mode: `audio`, `video`, `full` | `full` |
-| `--start` | Clip start time (`MM:SS` or `HH:MM:SS`) | none |
-| `--end` | Clip end time (`MM:SS` or `HH:MM:SS`) | none |
-| `--output` | Output file path or directory | yt-dlp default |
-| `--apple-music` | Import downloaded audio track into Apple Music (macOS, audio mode only) | `false` |
-| `--version` | Print version and exit | `false` |
+- `--mode`: `audio`, `video`, or `full` (default: `full`)
+- `--start`: clip start timestamp (`MM:SS` or `HH:MM:SS`)
+- `--end`: clip end timestamp (`MM:SS` or `HH:MM:SS`)
+- `--output`: output path (file or directory)
+- `--apple-music`: import downloaded audio into Apple Music (macOS, `--mode audio` only)
+- `--version`: print build version/commit/date and exit
 
-## Examples
+## Quick Examples
 
 ```bash
-# Full video (best quality) as MP4
+# Full video (default mode)
 ytcli "https://youtu.be/u9oxz7AQg5c"
 
-# Audio-only MP3 to a folder
+# Audio-only to Downloads
 ytcli --mode audio --output "$HOME/Downloads" "https://youtu.be/u9oxz7AQg5c"
 
-# Audio-only MP3 + import into Apple Music (macOS)
+# Audio-only and import to Apple Music (macOS)
 ytcli --mode audio --apple-music --output "$HOME/Downloads" "https://youtu.be/u9oxz7AQg5c"
 
-# Download a 30-second clip
+# Clip from 00:30 to 01:00
 ytcli --start 00:30 --end 01:00 --mode full "https://youtu.be/u9oxz7AQg5c"
 
-# Video-only MP4
-ytcli --mode video "https://youtu.be/u9oxz7AQg5c"
+# Version info
+ytcli --version
+ytcli version
 ```
-
-## Apple Music Notes
-
-- `--apple-music` requires `--mode audio`.
-- On first use, macOS may prompt for Automation permissions (Terminal/iTerm -> Music).
-- The file is downloaded first, then imported to your library.
 
 ## Development
 
@@ -111,27 +97,21 @@ make test
 make build
 ```
 
-### Versioned builds
+## Releases
+
+- CI runs tests/build on push and PR.
+- Pushing a semver tag (for example `v0.1.0`) triggers GoReleaser to publish release binaries for:
+  - macOS: `amd64`, `arm64`
+  - Linux: `amd64`, `arm64`
+  - Windows: `amd64`, `arm64`
+
+Create a release tag:
 
 ```bash
-make build VERSION=v1.0.0
+git tag v0.1.0
+git push origin v0.1.0
 ```
-
-## GitHub Release Flow
-
-This repo includes:
-- `.github/workflows/ci.yml`: runs tests + build on pushes/PRs
-- `.github/workflows/release.yml`: builds cross-platform binaries and attaches them to GitHub Releases on `v*` tags
-
-To publish a release:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-The release workflow will generate downloadable archives for Linux, macOS, and Windows.
 
 ## License
 
-MIT - see `LICENSE`.
+MIT
