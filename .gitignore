@@ -1,0 +1,12 @@
+# Build artifacts
+ytcli
+dist/
+
+# Go workspace
+bin/
+
+# Local environments
+.venv/
+
+# macOS
+.DS_Store
