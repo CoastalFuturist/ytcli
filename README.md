@@ -53,12 +53,14 @@ make build
 ## Usage
 
 ```bash
-ytcli [--start MM:SS|HH:MM:SS] [--end MM:SS|HH:MM:SS] [--mode audio|video|full] [--output PATH] [--apple-music] <url>
+ytcli [--start MM:SS|HH:MM:SS] [--end MM:SS|HH:MM:SS] [--mode audio|video|full] [--output PATH] [--artist NAME] [--song TITLE] [--apple-music] <url>
 
 # also supported
 ytcli --version
 ytcli version
 ```
+
+Put all flags before the URL (URL last).
 
 ## Flags
 
@@ -66,6 +68,8 @@ ytcli version
 - `--start`: clip start timestamp (`MM:SS` or `HH:MM:SS`)
 - `--end`: clip end timestamp (`MM:SS` or `HH:MM:SS`)
 - `--output`: output path (file or directory)
+- `--artist`: manual artist override for audio metadata (`--mode audio` only)
+- `--song`: manual song title override for audio metadata (`--mode audio` only)
 - `--apple-music`: import downloaded audio into Apple Music (macOS, `--mode audio` only)
 - `--version`: print build version/commit/date and exit
 
@@ -80,6 +84,9 @@ ytcli --mode audio --output "$HOME/Downloads" "https://youtu.be/u9oxz7AQg5c"
 
 # Audio-only and import to Apple Music (macOS)
 ytcli --mode audio --apple-music --output "$HOME/Downloads" "https://youtu.be/u9oxz7AQg5c"
+
+# Audio-only with manual metadata override
+ytcli --mode audio --artist "Daft Punk" --song "One More Time" "https://youtu.be/u9oxz7AQg5c"
 
 # Clip from 00:30 to 01:00
 ytcli --start 00:30 --end 01:00 --mode full "https://youtu.be/u9oxz7AQg5c"

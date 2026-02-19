@@ -32,6 +32,8 @@ type config struct {
 	End         string
 	Mode        string
 	Output      string
+	Artist      string
+	Song        string
 	AppleMusic  bool
 	ShowVersion bool
 }
@@ -153,16 +155,23 @@ func parseTrackMetadata(title, uploader string) trackMetadata {
 
 func outputTemplate(output string, cfg config, meta *trackMetadata) (string, error) {
 	defaultTemplate := "%(title)s.%(ext)s"
-	if cfg.Mode == "audio" && meta != nil {
-		defaultTemplate = fmt.Sprintf(
-			"%s - %s.%%(ext)s",
-			sanitizeFilenamePart(meta.Artist),
-			sanitizeFilenamePart(meta.Title),
-		)
+	if cfg.Mode == "audio" {
+		defaultTemplate = "%(artist,uploader)s - %(track,title)s.%(ext)s"
+		if meta != nil && strings.TrimSpace(meta.Title) != "" {
+			artist := meta.Artist
+			if strings.TrimSpace(artist) == "" {
+				artist = "Unknown Artist"
+			}
+			defaultTemplate = fmt.Sprintf(
+				"%s - %s.%%(ext)s",
+				sanitizeFilenamePart(artist),
+				sanitizeFilenamePart(meta.Title),
+			)
+		}
 	}
 
 	if output == "" {
-		if cfg.Mode == "audio" && meta != nil {
+		if cfg.Mode == "audio" {
 			return defaultTemplate, nil
 		}
 		return "", nil
@@ -246,10 +255,12 @@ func newFlagSet(cfg *config, stderr io.Writer) *flag.FlagSet {
 	fs.StringVar(&cfg.End, "end", "", "clip end timestamp (MM:SS or HH:MM:SS)")
 	fs.StringVar(&cfg.Mode, "mode", "full", "download mode: audio, video, or full")
 	fs.StringVar(&cfg.Output, "output", "", "destination file path or directory")
+	fs.StringVar(&cfg.Artist, "artist", "", "manual artist tag override for audio mode")
+	fs.StringVar(&cfg.Song, "song", "", "manual song title tag override for audio mode")
 	fs.BoolVar(&cfg.AppleMusic, "apple-music", false, "when mode=audio, import downloaded track into Apple Music library (macOS)")
 	fs.BoolVar(&cfg.ShowVersion, "version", false, "print version and build metadata, then exit")
 	fs.Usage = func() {
-		fmt.Fprintf(stderr, "Usage:\n  ytcli [--start MM:SS|HH:MM:SS] [--end MM:SS|HH:MM:SS] [--mode audio|video|full] [--output PATH] [--apple-music] [--version] <url>\n  ytcli version\n")
+		fmt.Fprintf(stderr, "Usage:\n  ytcli [--start MM:SS|HH:MM:SS] [--end MM:SS|HH:MM:SS] [--mode audio|video|full] [--output PATH] [--artist NAME] [--song TITLE] [--apple-music] [--version] <url>\n  ytcli version\n")
 		fs.PrintDefaults()
 	}
 	return fs
@@ -293,8 +304,37 @@ func parseConfig(args []string, stderr io.Writer) (config, *flag.FlagSet, error)
 	if cfg.AppleMusic && cfg.Mode != "audio" {
 		return cfg, fs, fmt.Errorf("--apple-music is only supported with --mode audio")
 	}
+	if (strings.TrimSpace(cfg.Artist) != "" || strings.TrimSpace(cfg.Song) != "") && cfg.Mode != "audio" {
+		return cfg, fs, fmt.Errorf("--artist and --song are only supported with --mode audio")
+	}
+	if cfg.Song != "" && cleanTitle(cfg.Song) == "" {
+		return cfg, fs, fmt.Errorf("--song must not be empty")
+	}
 
 	return cfg, fs, nil
+}
+
+func applyManualMetadata(base *trackMetadata, artistOverride, songOverride string) (*trackMetadata, bool) {
+	if strings.TrimSpace(artistOverride) == "" && strings.TrimSpace(songOverride) == "" {
+		return base, false
+	}
+
+	combined := trackMetadata{}
+	if base != nil {
+		combined = *base
+	}
+
+	if strings.TrimSpace(artistOverride) != "" {
+		combined.Artist = cleanArtist(artistOverride)
+	}
+	if strings.TrimSpace(songOverride) != "" {
+		combined.Title = cleanTitle(songOverride)
+	}
+
+	if strings.TrimSpace(combined.Artist) == "" {
+		combined.Artist = "Unknown Artist"
+	}
+	return &combined, true
 }
 
 func importIntoAppleMusic(path string) error {
@@ -343,6 +383,71 @@ func parseFinalPathLine(line string) (string, bool) {
 	return path, true
 }
 
+func writeAudioMetadata(path string, meta trackMetadata) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("failed to resolve downloaded file path: %w", err)
+	}
+	if _, err := os.Stat(absPath); err != nil {
+		return fmt.Errorf("downloaded file not found for metadata tagging: %w", err)
+	}
+
+	ext := filepath.Ext(absPath)
+	base := strings.TrimSuffix(filepath.Base(absPath), ext)
+	tmpPath := filepath.Join(filepath.Dir(absPath), base+".ytcli-tagging"+ext)
+	defer os.Remove(tmpPath)
+
+	cmd := exec.Command(
+		"ffmpeg",
+		"-hide_banner",
+		"-loglevel", "error",
+		"-nostdin",
+		"-y",
+		"-i", absPath,
+		"-map", "0",
+		"-c", "copy",
+		"-metadata", "artist="+meta.Artist,
+		"-metadata", "title="+meta.Title,
+		tmpPath,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(out))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("ffmpeg metadata write failed: %s", message)
+	}
+
+	if err := os.Rename(tmpPath, absPath); err != nil {
+		return fmt.Errorf("failed to finalize tagged audio file: %w", err)
+	}
+	return nil
+}
+
+func inferTrackMetadataFromPath(path string) (trackMetadata, bool) {
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return trackMetadata{}, false
+	}
+
+	parts := strings.SplitN(base, " - ", 2)
+	if len(parts) == 2 {
+		artist := cleanArtist(parts[0])
+		title := cleanTitle(parts[1])
+		if title != "" {
+			return trackMetadata{Artist: artist, Title: title}, true
+		}
+	}
+
+	title := cleanTitle(base)
+	if title == "" {
+		return trackMetadata{}, false
+	}
+	return trackMetadata{Artist: "Unknown Artist", Title: title}, true
+}
+
 func resolveYtDlpBinary() (string, error) {
 	if p, err := exec.LookPath("yt-dlp"); err == nil {
 		return p, nil
@@ -366,8 +471,8 @@ func fetchTrackMetadata(ytDlpBinary, url string) (*trackMetadata, error) {
 		ytDlpBinary,
 		"--skip-download",
 		"--no-warnings",
-		"--print", "%(title)s",
-		"--print", "%(uploader)s",
+		"--print", "%(artist,uploader)s",
+		"--print", "%(track,title)s",
 		url,
 	)
 	out, err := cmd.Output()
@@ -382,17 +487,17 @@ func fetchTrackMetadata(ytDlpBinary, url string) (*trackMetadata, error) {
 			lines = append(lines, trimmed)
 		}
 	}
-	if len(lines) == 0 {
-		return nil, fmt.Errorf("failed to fetch video metadata")
+	if len(lines) < 2 {
+		return nil, fmt.Errorf("failed to fetch artist/title metadata")
 	}
 
-	title := lines[0]
-	uploader := ""
-	if len(lines) > 1 {
-		uploader = lines[1]
+	meta := trackMetadata{
+		Artist: cleanArtist(lines[0]),
+		Title:  cleanTitle(lines[1]),
 	}
-
-	meta := parseTrackMetadata(title, uploader)
+	if meta.Title == "" {
+		return nil, fmt.Errorf("missing track title metadata")
+	}
 	return &meta, nil
 }
 
@@ -409,7 +514,12 @@ func run(cfg config, stdout, stderr io.Writer) error {
 			meta = fetchedMeta
 			fmt.Fprintf(stdout, "Parsed audio metadata: %s - %s\n", meta.Artist, meta.Title)
 		} else {
-			fmt.Fprintf(stderr, "Warning: metadata parsing failed, using default title (%v)\n", fetchErr)
+			fmt.Fprintf(stderr, "Warning: metadata parsing failed, using yt-dlp artist/title fallback template (%v)\n", fetchErr)
+		}
+
+		if updatedMeta, applied := applyManualMetadata(meta, cfg.Artist, cfg.Song); applied {
+			meta = updatedMeta
+			fmt.Fprintf(stdout, "Using manual metadata override: %s - %s\n", meta.Artist, meta.Title)
 		}
 	}
 
@@ -419,13 +529,14 @@ func run(cfg config, stdout, stderr io.Writer) error {
 	}
 
 	var downloadedPath string
-	if cfg.AppleMusic {
+	captureFinalPath := cfg.Mode == "audio" || cfg.AppleMusic
+	if captureFinalPath {
 		args = append(args, "--print", "after_move:"+finalPathPrefix+"%(filepath)s")
 	}
 
 	cmd := exec.Command(ytDlpBinary, args...)
 	cmd.Stderr = stderr
-	if cfg.AppleMusic {
+	if captureFinalPath {
 		cmdStdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return fmt.Errorf("failed to capture yt-dlp output: %w", err)
@@ -450,7 +561,51 @@ func run(cfg config, stdout, stderr io.Writer) error {
 		if err := cmd.Wait(); err != nil {
 			return fmt.Errorf("download failed: %w", err)
 		}
+	} else {
+		cmd.Stdout = stdout
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("download failed: %w", err)
+		}
+	}
 
+	if cfg.Mode == "audio" {
+		if strings.TrimSpace(downloadedPath) == "" {
+			fmt.Fprintln(stderr, "Warning: download completed but output path was unavailable, skipping metadata tagging")
+		} else {
+			needsInference := meta == nil ||
+				strings.TrimSpace(meta.Title) == "" ||
+				strings.TrimSpace(meta.Artist) == "" ||
+				(meta.Artist == "Unknown Artist" && strings.TrimSpace(cfg.Artist) == "")
+			if needsInference {
+				inferredMeta, ok := inferTrackMetadataFromPath(downloadedPath)
+				if !ok {
+					fmt.Fprintln(stderr, "Warning: metadata unavailable and could not infer tags from file name")
+				} else if meta == nil {
+					meta = &inferredMeta
+					fmt.Fprintf(stderr, "Warning: metadata fetch failed, inferred tags from filename: %s - %s\n", meta.Artist, meta.Title)
+				} else {
+					if strings.TrimSpace(meta.Title) == "" {
+						meta.Title = inferredMeta.Title
+					}
+					if strings.TrimSpace(meta.Artist) == "" || (meta.Artist == "Unknown Artist" && strings.TrimSpace(cfg.Artist) == "") {
+						meta.Artist = inferredMeta.Artist
+					}
+				}
+			}
+
+			if meta != nil && strings.TrimSpace(meta.Title) != "" {
+				if err := writeAudioMetadata(downloadedPath, *meta); err != nil {
+					fmt.Fprintf(stderr, "Warning: failed to write audio metadata tags (%v)\n", err)
+				} else {
+					fmt.Fprintf(stdout, "Tagged audio metadata: %s - %s\n", meta.Artist, meta.Title)
+				}
+			} else if meta != nil {
+				fmt.Fprintln(stderr, "Warning: metadata title is empty, skipping audio metadata tagging")
+			}
+		}
+	}
+
+	if cfg.AppleMusic {
 		if strings.TrimSpace(downloadedPath) == "" {
 			return fmt.Errorf("download completed but could not determine output path for Apple Music import")
 		}
@@ -458,11 +613,6 @@ func run(cfg config, stdout, stderr io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(stdout, "Imported into Apple Music: %s\n", downloadedPath)
-	} else {
-		cmd.Stdout = stdout
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("download failed: %w", err)
-		}
 	}
 
 	fmt.Fprintln(stdout, "Download completed successfully.")
